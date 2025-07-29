@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+sqlalchemy
+mysql-connector-python  
+pydantic-settings
+apscheduler
+httpx  
+openai
+pytz
+pymysql 
