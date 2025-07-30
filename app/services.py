@@ -57,7 +57,7 @@ class TratumService:
             async with httpx.AsyncClient() as client:
                 try:
                     print(f"[ETAPA 1/3] INICIANDO ANÁLISE PARA: {document_number}")
-                    response = await client.post(url, headers=headers, json=payload, timeout=180.0)
+                    response = await client.post(url, headers=headers, json=payload, timeout=300.0)
                     response.raise_for_status()
                     data = response.json()
                     return data.get("result")
@@ -128,52 +128,64 @@ class TratumService:
         print(f">>> [ETAPA 2/3] Análise iniciada. Aguardando {wait_time}s para processamento...")
         await asyncio.sleep(wait_time)
         
-        print(f">>> [ETAPA 3/3] Buscando todos os detalhes para a análise ID {analytics_id} em paralelo...")
+        print(f">>> [ETAPA 3/3] Buscando todos os detalhes para a análise ID {analytics_id}...")
         
         headers = {"Authorization": f"Bearer {token}"}
         holder_id = self.settings.TRATUM_HOLDER_ID
         org_id = self.settings.TRATUM_ORGANIZATION_ID
-        
-        # <<< Criando o payload específico para a chamada do sumário >>>
-        summary_payload = {
-            "holderId": holder_id,
-            "organizationId": org_id,
-            "userPlanConsumeUniqueId": consume_unique_id
-        }
-        
+        summary_payload = {"holderId": holder_id, "organizationId": org_id, "userPlanConsumeUniqueId": consume_unique_id}
+        main_summary = await self._fetch_generic_detail(
+            httpx.AsyncClient(),
+            url=f"{self.base_url}/v2/analytics/{analytics_id}",
+            headers=headers,
+            method="POST",
+            payload=summary_payload
+        )
+        if not main_summary:
+            print(f"ERRO: Falha ao buscar o sumário principal da análise {analytics_id}. Abortando.")
+            return {"summary": None}
+        debtor_id = main_summary.get("userPlanConsumeGovernmentDebtorSummaryId")
         async with httpx.AsyncClient() as client:
             tasks = {
-                "summary": self._fetch_generic_detail(
-                    client,
-                    url=f"{self.base_url}/v2/analytics/{analytics_id}",
-                    headers=headers,
-                    method="POST",
-                    payload=summary_payload
-                ),
                 "history_rfb": self._fetch_generic_detail(client, f"{self.base_url}/v1/holder/{holder_id}/organization/{org_id}/consumeunique/{consume_unique_id}/analytics/{analytics_id}/history-rfb/detail?page=1", headers),
                 "faturamento": self._fetch_generic_detail(client, f"{self.base_url}/v1/holder/{holder_id}/organization/{org_id}/consumeunique/{consume_unique_id}/analytics/{analytics_id}/activity-indicator/detail", headers),
                 "certidoes": self._fetch_generic_detail(client, f"{self.base_url}/v1/certification/fake/{analytics_id}", headers, data_key="list"),
                 "qsa": self._fetch_generic_detail(client, f"{self.base_url}/v1/holder/{holder_id}/organization/{org_id}/consumeunique/{consume_unique_id}/analytics/{analytics_id}/qsa?level=1st-LEVEL", headers, data_key="result"),
-            }
-            
+                "relacionamentos": self._fetch_generic_detail(
+                    client,
+                    url=f"{self.base_url}/v1/organizations/{org_id}/qsa/{document_number}",
+                    headers=headers,
+                    method="POST"
+            )}
+            if debtor_id:
+                tasks["divida_ativa"] = self._fetch_generic_detail(client, f"{self.base_url}/v1/holder/{holder_id}/organization/{org_id}/consumeunique/{consume_unique_id}/analytics/{analytics_id}/debtor/{debtor_id}/detail?size=10", headers)
             results = await asyncio.gather(*tasks.values())
             final_analysis = dict(zip(tasks.keys(), results))
+            final_analysis["summary"] = main_summary 
         
         print(">>> Detalhes agregados com sucesso.")
         return final_analysis
+
 class ComparisonService:
     def __init__(self):
         self.client = OpenAI(api_key=settings.OPENAI_API_KEY)
         
-    def _generate_prompt(self, document:str, old_data:dict, new_data:dict) -> str:
+    def _generate_prompt(self, document: str, old_data: dict, new_data: dict) -> str:
         old_summary_str = json.dumps(old_data.get('summary', {}), indent=2, ensure_ascii=False)
         new_summary_str = json.dumps(new_data.get('summary', {}), indent=2, ensure_ascii=False)
-        old_rfb_str = json.dumps(old_data.get('history_rfb', {}), indent=2, ensure_ascii=False)
-        new_rfb_str = json.dumps(new_data.get('history_rfb', {}), indent=2, ensure_ascii=False)
-        old_faturamento_str = json.dumps(old_data.get('faturamento', {}), indent=2, ensure_ascii=False)
-        new_faturamento_str = json.dumps(new_data.get('faturamento', {}), indent=2, ensure_ascii=False)
+        
+        old_divida_str = json.dumps(old_data.get('divida_ativa', {}), indent=2, ensure_ascii=False)
+        new_divida_str = json.dumps(new_data.get('divida_ativa', {}), indent=2, ensure_ascii=False)
+
         old_qsa_str = json.dumps(old_data.get('qsa', {}), indent=2, ensure_ascii=False)
         new_qsa_str = json.dumps(new_data.get('qsa', {}), indent=2, ensure_ascii=False)
+        
+        old_rfb_str = json.dumps(old_data.get('history_rfb', {}), indent=2, ensure_ascii=False)
+        new_rfb_str = json.dumps(new_data.get('history_rfb', {}), indent=2, ensure_ascii=False)
+
+        old_certidoes_str = json.dumps(old_data.get('certidoes', []), indent=2, ensure_ascii=False)
+        new_certidoes_str = json.dumps(new_data.get('certidoes', []), indent=2, ensure_ascii=False)
+
 
 
         return f"""
@@ -189,22 +201,25 @@ class ComparisonService:
  - A análise final deve ter no máximo **5 linhas de texto corrido** (sem parágrafos separados).
  - Enfoque nos riscos jurídicos, financeiros e sinais de estabilidade ou agravamento.
  - Faça uma análise no Quadro Societário (QSA) para checar se também houve mudança
- - Ao final, - Crie uma seção `#### Quadro Comparativo de Mudanças` e apresente os dados em uma **tabela Markdown**. A tabela deve incluir colunas para "Métrica", "Valor Anterior", "Valor Atual" e "Variação %".
+ - Forneça um paronama completo sobre os números de protestos encontrados
+ - Ao final, - Crie uma seção `#### Quadro Comparativo de Mudanças` e apresente os dados em uma **tabela Markdown**. A tabela deve incluir colunas para "Métrica", "Valor Anterior", "Valor Atual" e "Variação %" dos itens : Total de Processos, Valor Total de processos, Dívida Ativa, Numero de protestos, Valor total de processos e "Mudança no quadro societário" (nesse tópico responda com sim ou não).
  ---
 
 ### RELATÓRIOS PARA ANÁLISE:
 
-    --- RELATÓRIO ANTIGO ---
+     --- RELATÓRIO ANTIGO ---
         Sumário de Processos: ```{old_summary_str}```
-        Histórico da Receita Federal: ```{old_rfb_str}```
-        Indicador de Faturamento: ```{old_faturamento_str}```
         Quadro Societário: ```{old_qsa_str}```
-        
-        --- RELATÓRIO NOVO ---
+        Dívida Ativa: ```{old_divida_str}```
+        Histórico Receita Federal: ```{old_rfb_str}```
+        Certidões: ```{old_certidoes_str}```
+    
+    --- RELATÓRIO NOVO ---
         Sumário de Processos: ```{new_summary_str}```
-        Histórico da Receita Federal: ```{new_rfb_str}```
-        Indicador de Faturamento: ```{new_faturamento_str}```
-        Quadro Societário: ```{new_qsa_str}
+        Quadro Societário: ```{new_qsa_str}```
+        Dívida Ativa: ```{new_divida_str}```
+        Histórico Receita Federal: ```{new_rfb_str}```
+        Certidões: ```{new_certidoes_str}```
 
     Elabore o resumo executivo agora.
     """

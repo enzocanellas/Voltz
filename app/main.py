@@ -14,7 +14,7 @@ async def lifespan(app: FastAPI):
     await tratum_service.get_token()
     
     scheduler = AsyncIOScheduler()
-    scheduler.add_job(analysis_job, 'interval', minutes = 1)
+    scheduler.add_job(analysis_job, 'interval', minutes = 3)
     scheduler.start()
     print("SCHEDULER INICIADO")
     yield
