@@ -6,11 +6,24 @@ def get_active_documents(db: Session) -> list[models.MonitoredDocument]:
     # BUSCA DOCUMENTOS ATIVOS PARA MONITORAMENTO
     return db.query(models.MonitoredDocument).filter(models.MonitoredDocument.is_active == True).all()
 
-def create_analysis(db: Session, document_id: int, analysis_data: dict) -> models.Analysis:
-    # CRIA E SALVA UM NOVO REGISTRO DE ANALISE
+
+def get_active_documents_from_id(db: Session, start_id: int) -> list[models.MonitoredDocument]:
+    return (
+        db.query(models.MonitoredDocument)
+        .filter(
+            models.MonitoredDocument.is_active == True,
+            models.MonitoredDocument.id >= start_id  
+        )
+        .order_by(models.MonitoredDocument.id.asc()) 
+        .all()
+    )
+
+def create_analysis(db: Session, document_id: int, analysis_data: dict, unique_id: int, analytics_id: int) -> models.Analysis:
     db_analysis = models.Analysis(
         document_id=document_id,
-        analysis_json=analysis_data
+        analysis_json=analysis_data,
+        unique_id=unique_id,
+        analytics_id=analytics_id
     )
     db.add(db_analysis)
     db.commit()
@@ -46,3 +59,6 @@ def create_monitored_document(db: Session, doc: schemas.MonitoredDocumentCreate)
     db.commit()
     db.refresh(db_doc)
     return db_doc
+
+def get_document_by_number(db: Session, document_number: str) -> models.MonitoredDocument | None:
+    return db.query(models.MonitoredDocument).filter(models.MonitoredDocument.document == str(document_number)).first()

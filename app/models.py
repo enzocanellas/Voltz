@@ -23,10 +23,12 @@ class Analysis(Base):
     document_id = Column(Integer, ForeignKey("monitored_documents.id"))
     analysis_date = Column(DateTime, default=lambda: datetime.datetime.now(br_tz))
     analysis_json = Column(JSON, nullable=False)
-    comparison_resume = Column(Text, nullable=True)
+    comparison_resume = Column(JSON, nullable=True)
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
     total_tokens = Column(Integer, nullable=True)
+    unique_id = Column(Integer, nullable=True)
+    analytics_id = Column(Integer, nullable=True)
     
     document_owner = relationship("MonitoredDocument", back_populates="analyses")
     

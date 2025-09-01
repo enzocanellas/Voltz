@@ -1,3 +1,4 @@
+from typing import List
 from pydantic import BaseModel
 import datetime
 
@@ -6,6 +7,9 @@ class AnalysisBase(BaseModel):
     
 class AnalysisCreate(AnalysisBase):
     pass 
+
+class GenerateAnalysesRequest(BaseModel):
+    documents: List[str]
 
 class Analysis(AnalysisBase):
     id: int
